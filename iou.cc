@@ -8,7 +8,8 @@
 
 static io_uring ring;
 static int efd;
-static uv_poll_t poll_t;
+static uv_poll_t poller;
+static unsigned pending = 0;
 
 // TODO does this need to be an AsyncResource? 
 class Request : public Nan::AsyncResource {
@@ -26,9 +27,10 @@ class Request : public Nan::AsyncResource {
 };
 
 void OnSignal(uv_poll_t* handle, int status, int events) {
+  // Reset the eventfd
   char nothing[8];
   int rv = read(efd, &nothing, 8);
-  if (rv < 0) { /* TODO */ }
+  if (rv < 0) { /* impossible? */ }
 
   while (true) { // Drain the SQ
     io_uring_cqe* cqe;
@@ -37,6 +39,10 @@ void OnSignal(uv_poll_t* handle, int status, int events) {
     io_uring_get_completion(&ring, &cqe);
 
     if (!cqe) return;
+
+    pending--;
+    if (!pending)
+      uv_poll_stop(&poller);
 
     Request* req = (Request*)(void*)(cqe->user_data);
 
@@ -87,6 +93,9 @@ NAN_METHOD(read) {
     // TODO this needs to be in the next tick
     v8::Local<v8::Value> argv[1] = { Nan::ErrnoException(-ret) };
     Nan::Call(cb, Nan::GetCurrentContext()->Global(), 1, argv);
+  } else {
+    pending++;
+    uv_poll_start(&poller, UV_READABLE, OnSignal);
   }
 }
 
@@ -122,6 +131,9 @@ NAN_METHOD(writeBuffer) {
     // TODO this needs to be in the next tick
     v8::Local<v8::Value> argv[1] = { Nan::ErrnoException(-ret) };
     Nan::Call(cb, Nan::GetCurrentContext()->Global(), 1, argv);
+  } else {
+    pending++;
+    uv_poll_start(&poller, UV_READABLE, OnSignal);
   }
 }
 
@@ -138,13 +150,10 @@ NAN_MODULE_INIT(Init) {
     perror("REGISTER_EVENTFD");
   }
 
-  uv_poll_init(Nan::GetCurrentEventLoop(), &poll_t, efd);
-  uv_poll_start(&poll_t, UV_READABLE, OnSignal);
+  uv_poll_init(Nan::GetCurrentEventLoop(), &poller, efd);
 
   NAN_EXPORT(target, read);
   NAN_EXPORT(target, writeBuffer);
 }
 
 NODE_MODULE(iou, Init);
-
-
