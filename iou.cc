@@ -3,15 +3,12 @@
 #include <node_buffer.h>
 #include <stdint.h>
 #include "liburing/src/liburing.h"
+#include <sys/eventfd.h>
+#include <unistd.h>
 
 static io_uring ring;
-// idle seems to be the only one that pumps the event loop; prepare and check do
-// not. https://github.com/libuv/libuv/issues/2022
-// http://docs.libuv.org/en/v1.x/guide/utilities.html#idler-pattern
-// http://docs.libuv.org/en/v1.x/guide/utilities.html#check-prepare-watchers (no docs)
-// http://docs.libuv.org/en/v1.x/idle.html
-static uv_idle_t check;
-static int pending = 0;
+static int efd;
+static uv_poll_t poll_t;
 
 // TODO does this need to be an AsyncResource? 
 class Request : public Nan::AsyncResource {
@@ -28,20 +25,18 @@ class Request : public Nan::AsyncResource {
   Nan::Persistent<v8::Object> output;
 };
 
-void DoCheck(uv_idle_t* handle) {
-  while (true) { // get all available completions
+void OnSignal(uv_poll_t* handle, int status, int events) {
+  char nothing[8];
+  int rv = read(efd, &nothing, 8);
+  if (rv < 0) { /* TODO */ }
+
+  while (true) { // Drain the SQ
     io_uring_cqe* cqe;
     // Per source, this cannot return an error. (That's good because we have no
     // particular callback to invoke with an error.)
     io_uring_get_completion(&ring, &cqe);
 
     if (!cqe) return;
-
-    pending--;
-    if (!pending) {
-      int ret = uv_idle_stop(&check);
-
-    }
 
     Request* req = (Request*)(void*)(cqe->user_data);
 
@@ -92,13 +87,7 @@ NAN_METHOD(read) {
     // TODO this needs to be in the next tick
     v8::Local<v8::Value> argv[1] = { Nan::ErrnoException(-ret) };
     Nan::Call(cb, Nan::GetCurrentContext()->Global(), 1, argv);
-    return;
   }
-
-  if (!pending) {
-    uv_idle_start(&check, DoCheck);
-  }
-  pending++;
 }
 
 /**
@@ -133,13 +122,7 @@ NAN_METHOD(writeBuffer) {
     // TODO this needs to be in the next tick
     v8::Local<v8::Value> argv[1] = { Nan::ErrnoException(-ret) };
     Nan::Call(cb, Nan::GetCurrentContext()->Global(), 1, argv);
-    return;
   }
-
-  if (!pending) {
-    uv_idle_start(&check, DoCheck);
-  }
-  pending++;
 }
 
 NAN_MODULE_INIT(Init) {
@@ -149,10 +132,14 @@ NAN_MODULE_INIT(Init) {
     fprintf(stderr, "queue_init: %s\n", strerror(-ret));
   }
 
-  ret = uv_idle_init(Nan::GetCurrentEventLoop(), &check);
-  if (ret) {
-    fprintf(stderr, "uv_idle_init: %d\n", ret);
+  efd = eventfd(0, 0);
+  ret = io_uring_register(ring.ring_fd, IORING_REGISTER_EVENTFD, &efd, 1);
+  if (ret < 0) {
+    perror("REGISTER_EVENTFD");
   }
+
+  uv_poll_init(Nan::GetCurrentEventLoop(), &poll_t, efd);
+  uv_poll_start(&poll_t, UV_READABLE, OnSignal);
 
   NAN_EXPORT(target, read);
   NAN_EXPORT(target, writeBuffer);
