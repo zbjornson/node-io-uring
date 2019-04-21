@@ -2,7 +2,7 @@
 const N = 1000; // num files/iterations
 const P = Number.parseInt(process.argv[3], 10); // parallelism, do not exceed 32 for now
 const fileSize = 1024;
-let maxTimes = 100;
+let maxTimes = 250;
 /////
 
 const iou = require(".");
