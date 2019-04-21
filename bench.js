@@ -18,6 +18,7 @@ for (let i = 0; i < N; i++) {
 	fds.push(fs.openSync(`./.bench/${i}`, "r", 0o666));
 	buffers.push(Buffer.allocUnsafe(fileSize));
 }
+iou.fixFd(fds[0], fds[fds.length - 1]);
 
 const methods = [
 	{fn: fs.read, lbl: "fs     "},

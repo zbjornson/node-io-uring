@@ -11,6 +11,7 @@ static int efd;
 static uv_poll_t poller;
 static uv_prepare_t preparer;
 static unsigned pending = 0;
+static int minRegFd;
 
 // TODO does this need to be an AsyncResource? 
 class Request : public Nan::AsyncResource {
@@ -96,11 +97,14 @@ NAN_METHOD(read) {
   iov->iov_len = len;
   io_uring_sqe* sqe = io_uring_get_sqe(&ring);
   // TODO if (!sqe) {} // this returns NULL if buffer is full
-  io_uring_prep_readv(sqe, fd, iov, 1, pos);
+  io_uring_prep_readv(sqe, fd - minRegFd, iov, 1, pos);
   io_uring_sqe_set_data(sqe, req);
+  sqe->flags = IOSQE_FIXED_FILE;
 
-  if (!uv_is_active((uv_handle_t*)&preparer))
-    uv_prepare_start(&preparer, DoSubmit);
+  //if (!uv_is_active((uv_handle_t*)&preparer))
+  //  uv_prepare_start(&preparer, DoSubmit);
+  if (*ring.sq.kflags & IORING_SQ_NEED_WAKEUP)
+    io_uring_enter(ring.ring_fd, 1, 0, IORING_ENTER_SQ_WAKEUP, NULL);
 
   pending++;
 }
@@ -138,9 +142,23 @@ NAN_METHOD(writeBuffer) {
   pending++;
 }
 
+// TODO it's probably worth while to just fix all fds opened
+NAN_METHOD(fixFd) {
+  int fdmin = Nan::To<int>(info[0]).FromJust();
+  int fdmax = Nan::To<int>(info[1]).FromJust();
+  if ((fdmax - fdmin) > 1500) return Nan::ThrowError("Can only register up to 1500 fds");
+  int fds[1500];
+  minRegFd = fdmin;
+  fprintf(stderr, "fdmin: %d, fdmax: %d\n", fdmin, fdmax);
+  for (int fd = fdmin, i = 0; fd <= fdmax; i++, fd++) fds[i] = fd;
+  int ret = io_uring_register(ring.ring_fd, IORING_REGISTER_FILES, &fds, fdmax - fdmin + 1);
+  if (ret < 0) perror("io_uring_register");
+  info.GetReturnValue().Set(ret);
+}
+
 NAN_MODULE_INIT(Init) {
   // TODO fixed limit here
-  int ret = io_uring_queue_init(32, &ring, 0);
+  int ret = io_uring_queue_init(32, &ring, IORING_SETUP_SQPOLL);
   if (ret < 0) {
     fprintf(stderr, "queue_init: %s\n", strerror(-ret));
   }
@@ -153,9 +171,11 @@ NAN_MODULE_INIT(Init) {
 
   uv_poll_init(Nan::GetCurrentEventLoop(), &poller, efd);
   uv_prepare_init(Nan::GetCurrentEventLoop(), &preparer);
+  uv_poll_start(&poller, UV_READABLE, OnSignal);
 
   NAN_EXPORT(target, read);
   NAN_EXPORT(target, writeBuffer);
+  NAN_EXPORT(target, fixFd);
 }
 
 NODE_MODULE(iou, Init);

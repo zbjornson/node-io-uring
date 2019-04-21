@@ -7,11 +7,14 @@ function readFile(path, cb) {
 	}
 	fs.open(path, "r", 0o666, (err, fd) => {
 		if (err) return cb(err);
+		bindings.fixFd(fd, fd);
 		const onerr = err => fs.close(fd, () => cb(err));
 		fs.fstat(fd, (err, stats) => {
 			if (err) return onerr(err);
 			const dst = Buffer.allocUnsafe(stats.size);
+			console.log("Reading", fd);
 			bindings.read(fd, dst, 0, stats.size, 0, (err, bytesRead, data) => {
+				console.log("HI", err, bytesRead);
 				if (err) return onerr(err);
 				fs.close(fd, err => cb(err, data));
 			});
@@ -37,5 +40,6 @@ module.exports = {
 	readFile,
 	writeFile,
 	read: bindings.read,
-	write: bindings.writeBuffer
+	write: bindings.writeBuffer,
+	fixFd: bindings.fixFd
 };
