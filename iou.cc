@@ -9,6 +9,7 @@
 static io_uring ring;
 static int efd;
 static uv_poll_t poller;
+static uv_prepare_t preparer;
 static unsigned pending = 0;
 
 // TODO does this need to be an AsyncResource? 
@@ -61,6 +62,15 @@ void OnSignal(uv_poll_t* handle, int status, int events) {
   }
 }
 
+void DoSubmit(uv_prepare_t* handle) {
+  uv_prepare_stop(handle);
+  int ret = io_uring_submit(&ring);
+  if (ret < 0) {
+    fprintf(stderr, "io_uring_submit: %s\n", strerror(-ret));
+  }
+  uv_poll_start(&poller, UV_READABLE, OnSignal);
+}
+
 /**
  * Matches node_file.cc Read, with checks omitted for brevity.
  * 0 fd       int32
@@ -85,18 +95,14 @@ NAN_METHOD(read) {
   iov->iov_base = buffer_data + off;
   iov->iov_len = len;
   io_uring_sqe* sqe = io_uring_get_sqe(&ring);
+  // TODO if (!sqe) {} // this returns NULL if buffer is full
   io_uring_prep_readv(sqe, fd, iov, 1, pos);
   io_uring_sqe_set_data(sqe, req);
 
-  int ret = io_uring_submit(&ring);
-  if (ret < 0) {
-    // TODO this needs to be in the next tick
-    v8::Local<v8::Value> argv[1] = { Nan::ErrnoException(-ret) };
-    Nan::Call(cb, Nan::GetCurrentContext()->Global(), 1, argv);
-  } else {
-    pending++;
-    uv_poll_start(&poller, UV_READABLE, OnSignal);
-  }
+  if (!uv_is_active((uv_handle_t*)&preparer))
+    uv_prepare_start(&preparer, DoSubmit);
+
+  pending++;
 }
 
 /**
@@ -126,15 +132,10 @@ NAN_METHOD(writeBuffer) {
   io_uring_prep_writev(sqe, fd, iov, 1, pos);
   io_uring_sqe_set_data(sqe, req);
 
-  int ret = io_uring_submit(&ring);
-  if (ret < 0) {
-    // TODO this needs to be in the next tick
-    v8::Local<v8::Value> argv[1] = { Nan::ErrnoException(-ret) };
-    Nan::Call(cb, Nan::GetCurrentContext()->Global(), 1, argv);
-  } else {
-    pending++;
-    uv_poll_start(&poller, UV_READABLE, OnSignal);
-  }
+  if (!uv_is_active((uv_handle_t*)&preparer))
+    uv_prepare_start(&preparer, DoSubmit);
+
+  pending++;
 }
 
 NAN_MODULE_INIT(Init) {
@@ -151,6 +152,7 @@ NAN_MODULE_INIT(Init) {
   }
 
   uv_poll_init(Nan::GetCurrentEventLoop(), &poller, efd);
+  uv_prepare_init(Nan::GetCurrentEventLoop(), &preparer);
 
   NAN_EXPORT(target, read);
   NAN_EXPORT(target, writeBuffer);
