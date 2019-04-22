@@ -95,7 +95,8 @@ NAN_METHOD(read) {
     Nan::Call(cb, Nan::GetCurrentContext()->Global(), 1, argv);
   } else {
     pending++;
-    uv_poll_start(&poller, UV_READABLE, OnSignal);
+    if (!uv_is_active((uv_handle_t*)&poller))
+      uv_poll_start(&poller, UV_READABLE, OnSignal);
   }
 }
 
