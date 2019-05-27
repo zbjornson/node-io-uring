@@ -146,18 +146,19 @@ reap_events(struct io_uring *ring, unsigned nr)
 	printf("Reaping %u I/Os\n", nr);
 	gettimeofday(&start, NULL);
 	while (left) {
-		ret = io_uring_wait_completion(ring, &cqe);
+		ret = io_uring_wait_cqe(ring, &cqe);
 		if (ret < 0) {
-			printf("io_uring_wait_completion returned %d\n", ret);
+			printf("io_uring_wait_cqe returned %d\n", ret);
 			printf("expected success\n");
 			exit(1);
 		}
 		if (cqe->res != 4096)
 			printf("cqe->res: %d, expected 4096\n", cqe->res);
-		iov = (struct iovec *)cqe->user_data;
+		iov = io_uring_cqe_get_data(cqe);
 		free(iov->iov_base);
 		free(iov);
 		left--;
+		io_uring_cqe_seen(ring, cqe);
 
 		gettimeofday(&now, NULL);
 		timersub(&now, &start, &elapsed);

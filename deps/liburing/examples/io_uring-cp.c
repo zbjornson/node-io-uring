@@ -81,11 +81,16 @@ static int queue_read(struct io_uring *ring, off_t size, off_t offset)
 	struct io_uring_sqe *sqe;
 	struct io_data *data;
 
-	sqe = io_uring_get_sqe(ring);
-	if (!sqe)
+	data = malloc(size + sizeof(*data));
+	if (!data)
 		return 1;
 
-	data = malloc(size + sizeof(*data));
+	sqe = io_uring_get_sqe(ring);
+	if (!sqe) {
+		free(data);
+		return 1;
+	}
+
 	data->read = 1;
 	data->offset = data->first_offset = offset;
 
@@ -161,22 +166,23 @@ static int copy_file(struct io_uring *ring, off_t insize)
 			struct io_data *data;
 
 			if (!got_comp) {
-				ret = io_uring_wait_completion(ring, &cqe);
+				ret = io_uring_wait_cqe(ring, &cqe);
 				got_comp = 1;
 			} else
-				ret = io_uring_get_completion(ring, &cqe);
+				ret = io_uring_peek_cqe(ring, &cqe);
 			if (ret < 0) {
-				fprintf(stderr, "io_uring_get_completion: %s\n",
+				fprintf(stderr, "io_uring_peek_cqe: %s\n",
 							strerror(-ret));
 				return 1;
 			}
 			if (!cqe)
 				break;
 
-			data = (struct io_data *) (uintptr_t) cqe->user_data;
+			data = io_uring_cqe_get_data(cqe);
 			if (cqe->res < 0) {
 				if (cqe->res == -EAGAIN) {
 					queue_prepped(ring, data);
+					io_uring_cqe_seen(ring, cqe);
 					continue;
 				}
 				fprintf(stderr, "cqe failed: %s\n",
@@ -188,6 +194,7 @@ static int copy_file(struct io_uring *ring, off_t insize)
 				data->iov.iov_len -= cqe->res;
 				data->offset += cqe->res;
 				queue_prepped(ring, data);
+				io_uring_cqe_seen(ring, cqe);
 				continue;
 			}
 
@@ -204,6 +211,7 @@ static int copy_file(struct io_uring *ring, off_t insize)
 				free(data);
 				writes--;
 			}
+			io_uring_cqe_seen(ring, cqe);
 		}
 	}
 

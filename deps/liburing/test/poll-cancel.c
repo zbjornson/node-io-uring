@@ -87,31 +87,33 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	ret = io_uring_wait_completion(&ring, &cqe);
+	ret = io_uring_wait_cqe(&ring, &cqe);
 	if (ret < 0) {
 		printf("child: get cqe failed\n");
 		return 1;
 	}
 
-	pd = (struct poll_data *) (uintptr_t) cqe->user_data;
+	pd = io_uring_cqe_get_data(cqe);
 	if (cqe->res != 0) {
 		printf("sqe (add=%d/remove=%d) failed with %ld\n", pd->is_poll,
 							pd->is_cancel, (long) cqe->res);
 		return 1;
 	}
+	io_uring_cqe_seen(&ring, cqe);
 
-	ret = io_uring_wait_completion(&ring, &cqe);
+	ret = io_uring_wait_cqe(&ring, &cqe);
 	if (ret < 0) {
 		printf("parent: get failed\n");
 		return 1;
 	}
 
-	pd = (struct poll_data *) (uintptr_t) cqe->user_data;
+	pd = io_uring_cqe_get_data(cqe);
 	if (cqe->res != 0) {
 		printf("sqe (add=%d/remove=%d) failed with %ld\n", pd->is_poll,
 							pd->is_cancel, (long) cqe->res);
 		return 1;
 	}
 
+	io_uring_cqe_seen(&ring, cqe);
 	return 0;
 }

@@ -5,6 +5,7 @@
 #include "liburing/src/liburing.h"
 #include <sys/eventfd.h>
 #include <unistd.h>
+#include <iostream>
 
 static io_uring ring;
 static int efd;
@@ -37,15 +38,17 @@ void OnSignal(uv_poll_t* handle, int status, int events) {
     io_uring_cqe* cqe;
     // Per source, this cannot return an error. (That's good because we have no
     // particular callback to invoke with an error.)
-    io_uring_get_completion(&ring, &cqe);
+    io_uring_peek_cqe(&ring, &cqe);
 
     if (!cqe) return;
+
+    io_uring_cqe_seen(&ring, cqe);
 
     pending--;
     if (!pending)
       uv_poll_stop(&poller);
 
-    Request* req = (Request*)(void*)(cqe->user_data);
+    Request* req = static_cast<Request*>(io_uring_cqe_get_data(cqe));
 
     if (cqe->res < 0) {
       Nan::HandleScope scope;
@@ -153,6 +156,7 @@ NAN_MODULE_INIT(Init) {
   }
 
   uv_poll_init(Nan::GetCurrentEventLoop(), &poller, efd);
+  // uv_poll_init(Nan::GetCurrentEventLoop(), &poller, ring.ring_fd);
   uv_prepare_init(Nan::GetCurrentEventLoop(), &preparer);
 
   NAN_EXPORT(target, read);

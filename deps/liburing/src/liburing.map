@@ -2,10 +2,14 @@ LIBURING_0.1 {
 	global:
 		io_uring_queue_init;
 		io_uring_queue_exit;
-		io_uring_get_completion;
-		io_uring_wait_completion;
+		io_uring_peek_cqe;
+		io_uring_wait_cqe;
 		io_uring_submit;
 		io_uring_get_sqe;
+		io_uring_register;
+		io_uring_setup;
+		io_uring_enter;
+		io_uring_mmap;
 	local:
 		*;
 
