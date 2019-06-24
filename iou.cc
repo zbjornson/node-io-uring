@@ -3,12 +3,9 @@
 #include <node_buffer.h>
 #include <stdint.h>
 #include "liburing/src/liburing.h"
-#include <sys/eventfd.h>
 #include <unistd.h>
-#include <iostream>
 
 static io_uring ring;
-static int efd;
 static uv_poll_t poller;
 static uv_prepare_t preparer;
 static unsigned pending = 0;
@@ -29,11 +26,6 @@ class Request : public Nan::AsyncResource {
 };
 
 void OnSignal(uv_poll_t* handle, int status, int events) {
-  // Reset the eventfd
-  char nothing[8];
-  int rv = read(efd, &nothing, 8);
-  if (rv < 0) { /* impossible? */ }
-
   while (true) { // Drain the SQ
     io_uring_cqe* cqe;
     // Per source, this cannot return an error. (That's good because we have no
@@ -95,12 +87,12 @@ NAN_METHOD(read) {
 
   Request* req = new Request(cb, buffer_obj);
 
-  iovec* iov = new iovec(); // TODO is this deleted by the kernel?
-  iov->iov_base = buffer_data + off;
-  iov->iov_len = len;
+  iovec iov;
+  iov.iov_base = buffer_data + off;
+  iov.iov_len = len;
   io_uring_sqe* sqe = io_uring_get_sqe(&ring);
   // TODO if (!sqe) {} // this returns NULL if buffer is full
-  io_uring_prep_readv(sqe, fd, iov, 1, pos);
+  io_uring_prep_readv(sqe, fd, &iov, 1, pos);
   io_uring_sqe_set_data(sqe, req);
 
   if (!uv_is_active((uv_handle_t*)&preparer))
@@ -129,11 +121,11 @@ NAN_METHOD(writeBuffer) {
 
   Request* req = new Request(cb, buffer_obj);
 
-  iovec* iov = new iovec(); // TODO is this deleted by the kernel?
-  iov->iov_base = buffer_data + off;
-  iov->iov_len = len;
+  iovec iov;
+  iov.iov_base = buffer_data + off;
+  iov.iov_len = len;
   io_uring_sqe* sqe = io_uring_get_sqe(&ring);
-  io_uring_prep_writev(sqe, fd, iov, 1, pos);
+  io_uring_prep_writev(sqe, fd, &iov, 1, pos);
   io_uring_sqe_set_data(sqe, req);
 
   if (!uv_is_active((uv_handle_t*)&preparer))
@@ -149,14 +141,7 @@ NAN_MODULE_INIT(Init) {
     fprintf(stderr, "queue_init: %s\n", strerror(-ret));
   }
 
-  efd = eventfd(0, 0);
-  ret = io_uring_register(ring.ring_fd, IORING_REGISTER_EVENTFD, &efd, 1);
-  if (ret < 0) {
-    perror("REGISTER_EVENTFD");
-  }
-
-  uv_poll_init(Nan::GetCurrentEventLoop(), &poller, efd);
-  // uv_poll_init(Nan::GetCurrentEventLoop(), &poller, ring.ring_fd);
+  uv_poll_init(Nan::GetCurrentEventLoop(), &poller, ring.ring_fd);
   uv_prepare_init(Nan::GetCurrentEventLoop(), &preparer);
 
   NAN_EXPORT(target, read);
